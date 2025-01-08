@@ -1,6 +1,7 @@
 package com.example.multipleplayers;
 
 import android.os.Bundle;
+import android.widget.GridLayout;
 
 import androidx.annotation.OptIn;
 import androidx.appcompat.app.AppCompatActivity;
@@ -22,16 +23,24 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
-        playerViewList.add(findViewById(R.id.player_view1));
-        playerViewList.add(findViewById(R.id.player_view2));
-        playerViewList.add(findViewById(R.id.player_view3));
-        playerViewList.add(findViewById(R.id.player_view4));
-        playerViewList.add(findViewById(R.id.player_view5));
-        playerViewList.add(findViewById(R.id.player_view6));
-        playerViewList.add(findViewById(R.id.player_view7));
-        playerViewList.add(findViewById(R.id.player_view8));
-        playerViewList.add(findViewById(R.id.player_view9));
+        int NUM_PLAYERS = 9;
+        // Arrange players in a N x N grid
+        GridLayout grid = new GridLayout(this);
+        int NUM_COLUMNS = (int) Math.ceil(Math.sqrt(NUM_PLAYERS));
+        grid.setColumnCount(NUM_COLUMNS);
+        for (int i = 0; i < NUM_PLAYERS; i++) {
+            PlayerView playerView = new PlayerView(this);
+            playerView.setUseController(false);
+            GridLayout.LayoutParams params = new GridLayout.LayoutParams(
+                    GridLayout.spec(GridLayout.UNDEFINED, 1f),
+                    GridLayout.spec(GridLayout.UNDEFINED, 1f));
+            params.height = 0;
+            params.width = 0;
+            playerView.setLayoutParams(params);
+            grid.addView(playerView);
+            playerViewList.add(playerView);
+        }
+        setContentView(grid);
     }
 
     @OptIn(markerClass = UnstableApi.class)
