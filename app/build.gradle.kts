@@ -35,4 +35,5 @@ dependencies {
     implementation(libs.activity)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
+    implementation(libs.leanback)
 }

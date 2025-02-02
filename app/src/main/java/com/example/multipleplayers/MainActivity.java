@@ -1,11 +1,11 @@
 package com.example.multipleplayers;
 
-import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.format.Formatter;
+import android.util.Log;
 import android.view.View;
 import android.widget.GridLayout;
-import android.widget.VideoView;
 
 import androidx.annotation.OptIn;
 import androidx.appcompat.app.AppCompatActivity;
@@ -16,16 +16,19 @@ import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection;
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.exoplayer.upstream.DefaultAllocator;
 import androidx.media3.ui.PlayerView;
 
+@OptIn(markerClass = UnstableApi.class)
 public class MainActivity extends AppCompatActivity {
+    private final String TAG = "MultiplePlayers";
     private GridLayout mLayout;
+    private DefaultAllocator mAllocator;
     private final Uri VIDEO_URI = Uri.parse("https://storage.googleapis.com/wvmedia/clear/hevc/30fps/llama/llama_hevc_480p_30fps_3000.mp4");
     private final int NUM_PLAYERS = 9;
-    private final boolean USE_VIDEO_VIEW = false; // For comparison (ExoPlayer performs better)
 
-    @OptIn(markerClass = UnstableApi.class)
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -35,13 +38,9 @@ public class MainActivity extends AppCompatActivity {
         mLayout.setColumnCount(NUM_COLUMNS);
         for (int i = 0; i < NUM_PLAYERS; i++) {
             View view;
-            if (USE_VIDEO_VIEW) {
-                view = new VideoView(this);
-            } else {
-                PlayerView playerView = new PlayerView(this);
-                playerView.setUseController(false);
-                view = playerView;
-            }
+            PlayerView playerView = new PlayerView(this);
+            playerView.setUseController(false);
+            view = playerView;
             GridLayout.LayoutParams params = new GridLayout.LayoutParams(
                     GridLayout.spec(GridLayout.UNDEFINED, 1f),
                     GridLayout.spec(GridLayout.UNDEFINED, 1f));
@@ -51,56 +50,60 @@ public class MainActivity extends AppCompatActivity {
             mLayout.addView(view);
         }
         setContentView(mLayout);
-        setTitle(NUM_PLAYERS + " players using " +
-                (USE_VIDEO_VIEW ? "VideoView" : MediaLibraryInfo.VERSION_SLASHY));
+        String title = NUM_PLAYERS + " players using " + MediaLibraryInfo.VERSION_SLASHY;
+        setTitle(title);
+        Log.d(TAG, title);
+        mAllocator = new DefaultAllocator(false, C.DEFAULT_BUFFER_SEGMENT_SIZE);
     }
 
-    @OptIn(markerClass = UnstableApi.class)
     @Override
     public void onStart() {
         super.onStart();
-        DefaultAllocator allocator = new DefaultAllocator(false, C.DEFAULT_BUFFER_SEGMENT_SIZE);
         for (int i = 0; i < NUM_PLAYERS; i++) {
             View view = mLayout.getChildAt(i);
-            if (USE_VIDEO_VIEW) {
-                VideoView videoView = (VideoView) view;
-                videoView.setOnCompletionListener(MediaPlayer::start);
-                videoView.setVideoURI(VIDEO_URI);
-                videoView.start();
-            } else {
-                PlayerView playerView = (PlayerView) view;
-                ExoPlayer player = new ExoPlayer.Builder(this)
-                        .setLoadControl(new DefaultLoadControl.Builder()
-                                .setAllocator(allocator)
-                                .build())
-                        .build();
-                player.setMediaItem(MediaItem.fromUri(VIDEO_URI));
-                player.setPlayWhenReady(true);
-                player.setRepeatMode(Player.REPEAT_MODE_ONE);
-                player.prepare();
-                playerView.setPlayer(player);
-                playerView.onResume();
-            }
+            PlayerView playerView = (PlayerView) view;
+            ExoPlayer player = new ExoPlayer.Builder(this)
+                    // Share allocator to avoid multiple AVAILABLE_EXTRA_CAPACITY
+                    .setLoadControl(new DefaultLoadControl.Builder()
+                            .setAllocator(mAllocator)
+                            .build())
+                    // Split the bandwidth
+                    .setTrackSelector(new DefaultTrackSelector(this, new AdaptiveTrackSelection.Factory(
+                            AdaptiveTrackSelection.DEFAULT_MIN_DURATION_FOR_QUALITY_INCREASE_MS,
+                            AdaptiveTrackSelection.DEFAULT_MAX_DURATION_FOR_QUALITY_DECREASE_MS,
+                            AdaptiveTrackSelection.DEFAULT_MIN_DURATION_TO_RETAIN_AFTER_DISCARD_MS,
+                            AdaptiveTrackSelection.DEFAULT_BANDWIDTH_FRACTION / (float) NUM_PLAYERS)))
+                    .build();
+            player.setMediaItem(MediaItem.fromUri(VIDEO_URI));
+            player.setPlayWhenReady(true);
+            player.setRepeatMode(Player.REPEAT_MODE_ONE);
+            player.prepare();
+            playerView.setPlayer(player);
+            playerView.onResume();
         }
+        logTotalBytesAllocated("onStart");
     }
 
     @Override
     public void onStop() {
         super.onStop();
+        logTotalBytesAllocated("onStop");
         for (int i = 0; i < NUM_PLAYERS; i++) {
-            View view = mLayout.getChildAt(i);
-            if (USE_VIDEO_VIEW) {
-                VideoView videoView = (VideoView) view;
-                videoView.stopPlayback();
-            } else {
-                PlayerView playerView = (PlayerView) view;
-                playerView.onPause();
-                ExoPlayer player = (ExoPlayer) playerView.getPlayer();
-                if (player != null) {
-                    player.release();
-                    playerView.setPlayer(null);
-                }
+            PlayerView playerView = (PlayerView) mLayout.getChildAt(i);
+            playerView.onPause();
+            ExoPlayer player = (ExoPlayer) playerView.getPlayer();
+            if (player != null) {
+                player.release();
+                playerView.setPlayer(null);
             }
         }
+        logTotalBytesAllocated("before trim");
+        mAllocator.setTargetBufferSize(0);
+        logTotalBytesAllocated("after trim");
+    }
+
+    private void logTotalBytesAllocated(String prefix) {
+        int totalSize = mAllocator.getTotalBytesAllocated();
+        Log.d(TAG, prefix + ": " + Formatter.formatShortFileSize(this, totalSize));
     }
 }
