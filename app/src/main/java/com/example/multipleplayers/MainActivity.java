@@ -27,6 +27,7 @@ public class MainActivity extends AppCompatActivity {
     private GridLayout mLayout;
     private DefaultAllocator mAllocator;
     private final Uri VIDEO_URI = Uri.parse("https://storage.googleapis.com/wvmedia/clear/hevc/30fps/llama/llama_hevc_480p_30fps_3000.mp4");
+    private final long VIDEO_DURATION_MS = 90_000L;
     private final int NUM_PLAYERS = 9;
 
     @Override
@@ -37,17 +38,15 @@ public class MainActivity extends AppCompatActivity {
         int NUM_COLUMNS = (int) Math.ceil(Math.sqrt(NUM_PLAYERS));
         mLayout.setColumnCount(NUM_COLUMNS);
         for (int i = 0; i < NUM_PLAYERS; i++) {
-            View view;
             PlayerView playerView = new PlayerView(this);
             playerView.setUseController(false);
-            view = playerView;
             GridLayout.LayoutParams params = new GridLayout.LayoutParams(
                     GridLayout.spec(GridLayout.UNDEFINED, 1f),
                     GridLayout.spec(GridLayout.UNDEFINED, 1f));
             params.height = 0;
             params.width = 0;
-            view.setLayoutParams(params);
-            mLayout.addView(view);
+            playerView.setLayoutParams(params);
+            mLayout.addView(playerView);
         }
         setContentView(mLayout);
         String title = NUM_PLAYERS + " players using " + MediaLibraryInfo.VERSION_SLASHY;
@@ -77,6 +76,7 @@ public class MainActivity extends AppCompatActivity {
             player.setMediaItem(MediaItem.fromUri(VIDEO_URI));
             player.setPlayWhenReady(true);
             player.setRepeatMode(Player.REPEAT_MODE_ONE);
+            player.seekTo(i * VIDEO_DURATION_MS / (NUM_PLAYERS+1));
             player.prepare();
             playerView.setPlayer(player);
             playerView.onResume();
