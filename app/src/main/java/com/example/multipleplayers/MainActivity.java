@@ -2,6 +2,7 @@ package com.example.multipleplayers;
 
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
 import android.text.format.Formatter;
 import android.util.Log;
 import android.view.View;
@@ -27,8 +28,9 @@ public class MainActivity extends AppCompatActivity {
     private GridLayout mLayout;
     private DefaultAllocator mAllocator;
     private final Uri VIDEO_URI = Uri.parse("https://storage.googleapis.com/wvmedia/clear/hevc/30fps/llama/llama_hevc_480p_30fps_3000.mp4");
-    private final long VIDEO_DURATION_MS = 90_000L;
+    private final long VIDEO_DURATION_MS = 90_000;
     private final int NUM_PLAYERS = 9;
+    private Handler mHandler;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,6 +55,7 @@ public class MainActivity extends AppCompatActivity {
         setTitle(title);
         Log.d(TAG, title);
         mAllocator = new DefaultAllocator(false, C.DEFAULT_BUFFER_SEGMENT_SIZE);
+        mHandler = new Handler(getMainLooper());
     }
 
     @Override
@@ -78,24 +81,52 @@ public class MainActivity extends AppCompatActivity {
             player.setRepeatMode(Player.REPEAT_MODE_ONE);
             player.seekTo(i * VIDEO_DURATION_MS / (NUM_PLAYERS+1));
             player.prepare();
+            player.addListener(new Player.Listener() {
+                @Override
+                public void onPlaybackStateChanged(int playbackState) {
+                    Player.Listener.super.onPlaybackStateChanged(playbackState);
+                    String playbackStateString;
+                    switch (player.getPlaybackState()) {
+                        case Player.STATE_BUFFERING: playbackStateString = "buffering"; break;
+                        case Player.STATE_ENDED: playbackStateString = "ended"; break;
+                        case Player.STATE_IDLE: playbackStateString = "idle"; break;
+                        case Player.STATE_READY: playbackStateString = "ready"; break;
+                        default: playbackStateString = "unknown"; break;
+                    }
+                    logTotalBytesAllocated(String.format("playbackState:%s", playbackStateString));
+                }
+            });
             playerView.setPlayer(player);
             playerView.onResume();
         }
         logTotalBytesAllocated("onStart");
+        mHandler.postDelayed(mRunnable, 15_000);
+    }
+
+    private final Runnable mRunnable = () -> {
+        Log.d(TAG, "About to stop a player in the middle");
+        logTotalBytesAllocated("before stop");
+        stopPlayer(4);
+        logTotalBytesAllocated("after stop");
+    };
+
+    private void stopPlayer(int i) {
+        PlayerView playerView = (PlayerView) mLayout.getChildAt(i);
+        playerView.onPause();
+        ExoPlayer player = (ExoPlayer) playerView.getPlayer();
+        if (player != null) {
+            player.release();
+            playerView.setPlayer(null);
+        }
     }
 
     @Override
     public void onStop() {
         super.onStop();
+        mHandler.removeCallbacks(mRunnable);
         logTotalBytesAllocated("onStop");
         for (int i = 0; i < NUM_PLAYERS; i++) {
-            PlayerView playerView = (PlayerView) mLayout.getChildAt(i);
-            playerView.onPause();
-            ExoPlayer player = (ExoPlayer) playerView.getPlayer();
-            if (player != null) {
-                player.release();
-                playerView.setPlayer(null);
-            }
+            stopPlayer(i);
         }
         logTotalBytesAllocated("before trim");
         mAllocator.setTargetBufferSize(0);
