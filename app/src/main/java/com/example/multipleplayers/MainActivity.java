@@ -1,11 +1,14 @@
 package com.example.multipleplayers;
 
+import static androidx.media3.common.util.Assertions.checkState;
+
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.Process;
 import android.text.format.Formatter;
 import android.util.Log;
-import android.view.View;
 import android.widget.GridLayout;
 
 import androidx.annotation.OptIn;
@@ -29,12 +32,14 @@ import java.util.Locale;
 @OptIn(markerClass = UnstableApi.class)
 public class MainActivity extends AppCompatActivity {
     private final String TAG = "MultiplePlayers";
-    private GridLayout mLayout;
-    private final boolean mShareAllocator = true;
-    private final List<DefaultAllocator> mAllocators = new ArrayList<>();
-    private final Uri VIDEO_URI = Uri.parse("https://storage.googleapis.com/wvmedia/clear/hevc/30fps/llama/llama_hevc_480p_30fps_3000.mp4");
-    private final long VIDEO_DURATION_MS = 90_000;
     private final int NUM_PLAYERS = 9;
+    private final boolean mShareAllocator = true;
+    private final boolean mShareLoadControl = true;
+    private final boolean mSharePlaybackThread = true;
+    private GridLayout mLayout;
+    private final List<DefaultAllocator> mAllocators = new ArrayList<>();
+    private final List<DefaultLoadControl> mLoadControls = new ArrayList<>();
+    private final List<HandlerThread> mPlaybackThreads = new ArrayList<>();
     private Handler mHandler;
 
     @Override
@@ -59,36 +64,57 @@ public class MainActivity extends AppCompatActivity {
         String title = NUM_PLAYERS + " players using " + MediaLibraryInfo.VERSION_SLASHY;
         setTitle(title);
         Log.d(TAG, title);
-        if (mShareAllocator) {
-            mAllocators.add(new DefaultAllocator(false, C.DEFAULT_BUFFER_SEGMENT_SIZE));
-        } else for (int i = 0; i < NUM_PLAYERS; i++) {
-            mAllocators.add(new DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE));
-        }
+        checkState(!mShareLoadControl || (mSharePlaybackThread && mShareAllocator),
+            "Players that share the same LoadControl must share the same playback thread and allocator.");
         mHandler = new Handler(getMainLooper());
     }
 
     @Override
     public void onStart() {
         super.onStart();
+        Uri VIDEO_URI = Uri.parse("https://storage.googleapis.com/wvmedia/clear/hevc/30fps/llama/llama_hevc_480p_30fps_3000.mp4");
+        long VIDEO_DURATION_MS = 90_000;
+        MediaItem mediaItem = MediaItem.fromUri(VIDEO_URI);
+        long seekOffset = VIDEO_DURATION_MS / (NUM_PLAYERS+1);
+        if (mShareAllocator) {
+            mAllocators.add(new DefaultAllocator(false, C.DEFAULT_BUFFER_SEGMENT_SIZE));
+        } else for (int i = 0; i < NUM_PLAYERS; i++) {
+            mAllocators.add(new DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE));
+        }
+        if (mShareLoadControl) {
+            mLoadControls.add(new DefaultLoadControl.Builder()
+                .setAllocator(mAllocators.get(0))
+                .build());
+        } else for (int i = 0; i < NUM_PLAYERS; i++) {
+            mLoadControls.add(new DefaultLoadControl.Builder()
+                .setAllocator(mAllocators.get(mShareAllocator ? 0 : i))
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build());
+        }
+        if (mSharePlaybackThread) {
+            HandlerThread playbackThread = new HandlerThread("ExoPlayer:Playback", Process.THREAD_PRIORITY_AUDIO);
+            playbackThread.start();
+            mPlaybackThreads.add(playbackThread);
+        } else for (int i = 0; i < NUM_PLAYERS; i++) {
+            HandlerThread playbackThread = new HandlerThread("ExoPlayer:Playback" + i, Process.THREAD_PRIORITY_AUDIO);
+            playbackThread.start();
+            mPlaybackThreads.add(playbackThread);
+        }
         for (int i = 0; i < NUM_PLAYERS; i++) {
-            View view = mLayout.getChildAt(i);
-            PlayerView playerView = (PlayerView) view;
             ExoPlayer player = new ExoPlayer.Builder(this)
-                    // Share allocator to avoid multiple AVAILABLE_EXTRA_CAPACITY
-                    .setLoadControl(new DefaultLoadControl.Builder()
-                            .setAllocator(mAllocators.get(mShareAllocator ? 0 : i))
-                            .build())
-                    // Split the bandwidth
-                    .setTrackSelector(new DefaultTrackSelector(this, new AdaptiveTrackSelection.Factory(
-                            AdaptiveTrackSelection.DEFAULT_MIN_DURATION_FOR_QUALITY_INCREASE_MS,
-                            AdaptiveTrackSelection.DEFAULT_MAX_DURATION_FOR_QUALITY_DECREASE_MS,
-                            AdaptiveTrackSelection.DEFAULT_MIN_DURATION_TO_RETAIN_AFTER_DISCARD_MS,
-                            AdaptiveTrackSelection.DEFAULT_BANDWIDTH_FRACTION / (float) NUM_PLAYERS)))
-                    .build();
-            player.setMediaItem(MediaItem.fromUri(VIDEO_URI));
+                .setLoadControl(mLoadControls.get(mShareLoadControl ? 0 : i))
+                .setPlaybackLooper(mPlaybackThreads.get(mSharePlaybackThread ? 0 : i).getLooper())
+                // Split the bandwidth
+                .setTrackSelector(new DefaultTrackSelector(this, new AdaptiveTrackSelection.Factory(
+                    AdaptiveTrackSelection.DEFAULT_MIN_DURATION_FOR_QUALITY_INCREASE_MS,
+                    AdaptiveTrackSelection.DEFAULT_MAX_DURATION_FOR_QUALITY_DECREASE_MS,
+                    AdaptiveTrackSelection.DEFAULT_MIN_DURATION_TO_RETAIN_AFTER_DISCARD_MS,
+                    AdaptiveTrackSelection.DEFAULT_BANDWIDTH_FRACTION / (float) NUM_PLAYERS)))
+                .build();
+            player.setMediaItem(mediaItem);
             player.setPlayWhenReady(true);
             player.setRepeatMode(Player.REPEAT_MODE_ONE);
-            player.seekTo(i * VIDEO_DURATION_MS / (NUM_PLAYERS+1));
+            player.seekTo(i * seekOffset);
             player.prepare();
             final int finalI = i;
             player.addListener(new Player.Listener() {
@@ -106,17 +132,20 @@ public class MainActivity extends AppCompatActivity {
                     logTotalBytesAllocated(String.format(Locale.US, "Player%d:%s", finalI, playbackStateString));
                 }
             });
+            PlayerView playerView = (PlayerView) mLayout.getChildAt(i);
             playerView.setPlayer(player);
             playerView.onResume();
         }
         logTotalBytesAllocated("onStart");
+
+        // Schedule a single player stop to see how the memory changes
         mHandler.postDelayed(mRunnable, 15_000);
     }
 
     private final Runnable mRunnable = () -> {
-        Log.d(TAG, "About to stop a player in the middle");
+        Log.d(TAG, "About to stop a single player");
         logTotalBytesAllocated("before stop");
-        stopPlayer(4);
+        stopPlayer(0);
         logTotalBytesAllocated("after stop");
     };
 
@@ -128,6 +157,8 @@ public class MainActivity extends AppCompatActivity {
             player.release();
             playerView.setPlayer(null);
         }
+        if (!mSharePlaybackThread)
+            mPlaybackThreads.get(i).quitSafely();
     }
 
     @Override
@@ -138,13 +169,15 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < NUM_PLAYERS; i++) {
             stopPlayer(i);
         }
-        logTotalBytesAllocated("before trim");
+        if (mSharePlaybackThread)
+            mPlaybackThreads.get(0).quitSafely();
+        logTotalBytesAllocated("before final trim");
         if (mShareAllocator) {
             mAllocators.get(0).setTargetBufferSize(0);
         } else for (int i = 0; i < NUM_PLAYERS; i++) {
             mAllocators.get(i).setTargetBufferSize(0);
         }
-        logTotalBytesAllocated("after trim");
+        logTotalBytesAllocated("after final trim");
     }
 
     private void logTotalBytesAllocated(String prefix) {
