@@ -4,12 +4,12 @@ plugins {
 
 android {
     namespace = "com.example.multipleplayers"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.multipleplayers"
         minSdk = 34
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }
@@ -34,6 +34,7 @@ dependencies {
     implementation(libs.material)
     implementation(libs.activity)
     implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.ui)
     implementation(libs.leanback)
 }
